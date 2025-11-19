@@ -12,6 +12,8 @@
 #include "jpegrw.h"
 #include <sys/wait.h>
 #include <sys/mman.h>
+#include <string.h>
+#include <math.h>
 
 
 // local routines
@@ -28,7 +30,7 @@ int main( int argc, char *argv[] )
 
 	// These are the default configuration values used
 	// if no command line arguments are given.
-	char *outfile = "mandel.jpg";
+	char outfile[256] = "mandel";
 	double xcenter = 0;
 	double ycenter = 0;
 	double xscale = 4;
@@ -70,7 +72,7 @@ int main( int argc, char *argv[] )
 				max = atoi(optarg);
 				break;
 			case 'o':
-				outfile = optarg;
+				strcpy(outfile, optarg);
 				break;
 			case 'h':
 				show_help();
@@ -79,7 +81,7 @@ int main( int argc, char *argv[] )
 		}
 	}
 
-	for(int i = 1; i < frames; i++) {
+	for(int i = 0; i < frames; i++) {
 		// create child processes for 
     	if (active_proc >= procs){
             wait(NULL);
@@ -88,11 +90,15 @@ int main( int argc, char *argv[] )
         int pid = fork();
         if (pid == 0){
 			// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
-			xscale = xscale /2;
+			xscale = xscale /pow(1.2,i);
 			yscale = xscale / (image_width ) * (image_height );
 
+			// change file name per frame
+			char file_name[512];
+			snprintf(file_name, sizeof(file_name), "%s%i.jpg", outfile, i);
+
 			// Display the configuration of the image.
-			printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
+			printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,file_name);
 
 			// Create a raw image of the appropriate size.
 			imgRawImage* img = initRawImage(image_width,image_height);
@@ -104,8 +110,7 @@ int main( int argc, char *argv[] )
 			compute_image(img,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
 
 			// Save the image in the stated file.
-			outfile = "mandel.jpg";
-			storeJpegImageFile(img,outfile);
+			storeJpegImageFile(img,file_name);
 
 			// free the mallocs
 			freeRawImage(img);
@@ -113,9 +118,12 @@ int main( int argc, char *argv[] )
             exit(0);
         }else if (pid > 0) { //This is the parent
             active_proc++;
-            //printf("%d\n", active_proc);
         }
 	}
+	/*while (active_proc > 0){
+        wait(NULL);
+        active_proc--;
+    }*/
 
 	return 0;
 }
