@@ -14,13 +14,35 @@
 #include <sys/mman.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
+#include <bits/getopt_core.h>
+#include <errno.h>
 
+#define MAX_THREADS 20
+
+typedef struct {
+		int start;  
+		int end;    
+	} Section;
+
+typedef struct {
+		imgRawImage* img;
+		pthread_t* thread;
+		int nthreads;
+		double xmin;
+		double xmax;
+		double ymin;
+		double ymax;
+		int max;
+		Section* sections;
+	}arguments;
 
 // local routines
 static int iteration_to_color( int i, int max );
 static int iterations_at_point( double x, double y, int max );
-static void compute_image( imgRawImage *img, double xmin, double xmax,
-									double ymin, double ymax, int max );
+static void compute_image(imgRawImage* img, pthread_t *thread, int nthreads, double xmin, double xmax,  
+									double ymin, double ymax, int max);
+void *compute_image_thread(void *ptr);
 static void show_help();
 
 
@@ -41,17 +63,21 @@ int main( int argc, char *argv[] )
 	int active_proc = 0;
 	int procs = 2;
 	int frames = 50;
+	int nthreads = 2;
 
 	// For each command line argument given,
 	// override the appropriate configuration value.
 
-	while((c = getopt(argc,argv,"n:f:x:y:s:W:H:m:o:h"))!=-1) {
+	while((c = getopt(argc,argv,"n:f:t:x:y:s:W:H:m:o:h"))!=-1) {
 		switch(c){
 			case 'n':
 				procs = atoi(optarg);
 				break;
 			case 'f':
 				frames = atoi(optarg);
+				break;
+			case 't':
+				nthreads = atoi(optarg);
 				break;
 			case 'x':
 				xcenter = atof(optarg);
@@ -81,6 +107,8 @@ int main( int argc, char *argv[] )
 		}
 	}
 
+	pthread_t thread[nthreads];
+
 	for(int i = 0; i < frames; i++) {
 		// create child processes for 
     	if (active_proc >= procs){
@@ -88,6 +116,7 @@ int main( int argc, char *argv[] )
             active_proc--;
         }
         int pid = fork();
+		//printf("%i\n",pid);
         if (pid == 0){
 			// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
 			xscale = xscale /pow(1.2,i);
@@ -107,7 +136,7 @@ int main( int argc, char *argv[] )
 			setImageCOLOR(img,0);
 
 			// Compute the Mandelbrot image
-			compute_image(img,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
+			compute_image(img,thread,nthreads,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
 
 			// Save the image in the stated file.
 			storeJpegImageFile(img,file_name);
@@ -157,37 +186,66 @@ int iterations_at_point( double x, double y, int max )
 	return iter;
 }
 
+
 /*
 Compute an entire Mandelbrot image, writing each point to the given bitmap.
 Scale the image to the range (xmin-xmax,ymin-ymax), limiting iterations to "max"
 */
+void compute_image(imgRawImage* img, pthread_t *thread, int nthreads,
+                   double xmin, double xmax, double ymin, double ymax, int max){
+    int height = img->height;
 
-void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max )
-{
-	int i,j;
+    Section sections[MAX_THREADS];
+    arguments args[MAX_THREADS];
 
-	int width = img->width;
-	int height = img->height;
+    int baseRows = height / nthreads;
+    int leftover = height % nthreads;
+    int posRow = 0;
 
-	// For every pixel in the image...
+    for (int k = 0; k < nthreads; k++) {
+        int rowsHere = baseRows + (k < leftover ? 1 : 0);
 
-	for(j=0;j<height;j++) {
+        sections[k].start = posRow;
+        sections[k].end   = posRow + rowsHere;
+        posRow += rowsHere;
 
-		for(i=0;i<width;i++) {
+        args[k].img = img;
+        args[k].xmin = xmin; args[k].xmax = xmax;
+        args[k].ymin = ymin; args[k].ymax = ymax;
+        args[k].max = max;
+        args[k].sections = &sections[k];
 
-			// Determine the point in x,y space for that pixel.
-			double x = xmin + i*(xmax-xmin)/width;
-			double y = ymin + j*(ymax-ymin)/height;
+        int rc = pthread_create(&thread[k], NULL, compute_image_thread, &args[k]);
+        if (rc != 0) { errno = rc; perror("pthread_create"); }
+    }
 
-			// Compute the iterations at that point.
-			int iters = iterations_at_point(x,y,max);
-
-			// Set the pixel in the bitmap.
-			setPixelCOLOR(img,i,j,iteration_to_color(iters,max));
-		}
-	}
+    for (int k = 0; k < nthreads; k++) {
+        int rc = pthread_join(thread[k], NULL);
+        if (rc != 0) { errno = rc; perror("pthread_join"); }
+    }
 }
 
+void *compute_image_thread(void *ptr){
+    arguments *args = (arguments *)ptr;
+
+    int width  = args->img->width;
+    int height = args->img->height;
+
+    int start = args->sections->start;
+    int end   = args->sections->end;
+
+    for (int i = start; i < end; i++) {
+        for (int j = 0; j < width; j++) {
+
+            double x = args->xmin + i * (args->xmax - args->xmin) / width;
+            double y = args->ymin + j * (args->ymax - args->ymin) / height;
+
+            int iters = iterations_at_point(x, y, args->max);
+            setPixelCOLOR(args->img, i, j, iteration_to_color(iters, args->max));
+        }
+    }
+    return NULL;
+}
 
 /*
 Convert a iteration number to a color.
