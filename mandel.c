@@ -4,7 +4,8 @@
 //  https://users.cs.fiu.edu/~cpoellab/teaching/cop4610_fall22/project3.html
 //
 //  Converted to use jpg instead of BMP and other minor changes
-//  
+//   Revised by: Carson Schur
+// 	 CPE 2600 
 ///
 #include <stdlib.h>
 #include <stdio.h>
